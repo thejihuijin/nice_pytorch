@@ -7,7 +7,8 @@ import torchvision
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-from cs_exp import CSOptions, NICE_CS, CSDataset
+from cs_exp import NICE_CS, CSDataset
+from options import CSTrainOptions
 from util.visualizer import Visualizer
 
 import time
@@ -16,7 +17,7 @@ import argparse
 import math, random
 
 if __name__ == '__main__':
-    opt = CSOptions().parse()
+    opt = CSTrainOptions().parse()
     
     # Data
     dataset = CSDataset(opt.dataroot)

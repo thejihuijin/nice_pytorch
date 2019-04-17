@@ -6,6 +6,8 @@ import torch.nn as nn
 import torchvision
 import torch.optim as optim
 from torch.utils.data import Dataset
+import torch.autograd as autograd
+
 
 from nice.models import NICEModel
 
@@ -46,28 +48,28 @@ class CSOptions():
    
         
         # Visdom related stuff
-        parser.add_argument('--display_freq', type=int, default=160, help='frequency of showing training results on screen')
+        parser.add_argument('--display_freq', type=int, default=50000, help='frequency of showing training results on screen')
         parser.add_argument('--display_ncols', type=int, default=3, help='if positive, display all images in a single visdom web panel with certain number of images per row.')
         parser.add_argument('--display_id', type=int, default=1, help='window id of the web display')
         parser.add_argument('--display_server', type=str, default="http://localhost", help='visdom server of the web display')
         parser.add_argument('--display_env', type=str, default='main', help='visdom display environment name (default is "main")')
         parser.add_argument('--display_port', type=int, default=5500, help='visdom port of the web display')
-        parser.add_argument('--update_html_freq', type=int, default=2000, help='frequency of saving training results to html')
-        parser.add_argument('--print_freq', type=int, default=1000, help='frequency of showing training results on console')
+        parser.add_argument('--update_html_freq', type=int, default=100000, help='frequency of saving training results to html')
+        parser.add_argument('--print_freq', type=int, default=50000, help='frequency of showing training results on console')
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--no_html', action='store_true', help='do not save intermediate training results to [opt.checkpoints_dir]/[opt.name]/web/')
         
         # Training Parameters
-        parser.add_argument('--batch_size', type=int, default=20, help='input batch size')
+        parser.add_argument('--batch_size', type=int, default=10000, help='input batch size')
 
-        parser.add_argument("--nEpochs", type=int, default=1000, help="number of epochs to train for")
+        parser.add_argument("--nEpochs", type=int, default=10000, help="number of epochs to train for")
         parser.add_argument("--lr", type=float, default=1e-4, help="Learning Rate. Default=1e-4")
         parser.add_argument("--step", type=int, default=200, help="Sets the learning rate to the initial LR decayed by momentum every n epochs, Default: n=500")
         parser.add_argument("--start-epoch", default=1, type=int, help="Manual epoch number (useful on restarts)")
         parser.add_argument("--threads", type=int, default=0, help="Number of threads for data loader to use, Default: 1")
         parser.add_argument("--isTrain",action="store_true",help="Train mode")
-        parser.add_argument('--save_latest_freq', type=int, default=50000, help='frequency of saving the latest results')
-        parser.add_argument('--save_epoch_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
+        parser.add_argument('--save_latest_freq', type=int, default=100000, help='frequency of saving the latest results')
+        parser.add_argument('--save_epoch_freq', type=int, default=500, help='frequency of saving checkpoints at the end of epochs')
         parser.add_argument('--save_by_iter', action='store_true', help='whether saves model by iteration')
         parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
         parser.add_argument('--epoch_count', type=int, default=1, help='the starting epoch count, we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>, ...')
@@ -172,7 +174,7 @@ class NICE_CS(nn.Module):
         
         
         # Create Networks
-        self.netF = NICEModel(opt.input_dim, opt.hidden_dim, opt.num_layers)
+        self.netF = NICEModel(opt.input_dim, opt.hidden_dim, opt.num_layers,opt.use_batch_norm).to(self.device)
         
         self.model_names = ['F']
         
@@ -183,6 +185,23 @@ class NICE_CS(nn.Module):
             
             # Define Optimizers
             self.optimizer = torch.optim.Adam(self.netF.parameters(), lr=opt.lr)
+            
+            if opt.l1 > 0:
+                self.criterionL1 = torch.nn.L1Loss()
+                self.loss_names.append('l1')
+            if opt.fb > 0:
+                self.loss_names.append('imse')
+                if opt.fb_l1:
+                    self.criterionFB = torch.nn.L1Loss()
+                else:
+                    self.criterionFB = torch.nn.MSELoss()
+            if opt.jacvec > 0:
+                self.loss_names.append('jacvec')
+                self.AtA = torch.Tensor(np.load(opt.AtA_loc)).to(self.device)
+        
+        if not opt.isTrain:
+            # Load networks
+            self.load_networks(opt.epoch)
     
     def set_input(self,input):
         xs,ys = input
@@ -191,16 +210,42 @@ class NICE_CS(nn.Module):
         
     def forward(self):
         self.yhats = self.netF(self.xs)
+        
+    def reverse(self):
+        self.xhats = self.netF.inverse(self.ys,train=self.isTrain)
+    
+    def compute_jacvec(self):
+        grad_outputs = torch.randn(self.yhats.size()).to(self.device)
+        J = autograd.grad(outputs=self.yhats, inputs=self.xs,
+                 grad_outputs=grad_outputs,
+                 create_graph=True, retain_graph=True, only_inputs=True)[0]
+        gt = torch.matmul(grad_outputs,self.AtA)
+        
+        return self.criterionMSE(J,gt)
     
     def backward_F(self):
         # Content Loss
         self.loss_mse = self.criterionMSE(self.yhats,self.ys)#*self.opt.lambda_l1
-        
+        self.loss = self.loss_mse
+
+        if self.opt.l1 > 0 or self.opt.fb > 0:
+            self.reverse()
+        if self.opt.l1 > 0:
+            self.loss_l1 = self.criterionL1(self.xhats, torch.zeros_like(self.xhats).to(self.device))*self.opt.l1
+            self.loss += self.loss_l1
+        if self.opt.fb > 0:
+            self.loss_imse = self.criterionFB(self.xhats,self.xs)*self.opt.fb
+            self.loss += self.loss_imse
+        if self.opt.jacvec > 0:
+            self.loss_jacvec = self.compute_jacvec()*self.opt.jacvec
+            self.loss += self.loss_jacvec
         # Calculate Gradients
-        self.loss_mse.backward()
+        self.loss.backward()
         
     def optimize_parameters(self):
         # forward
+        if self.opt.jacvec > 0:
+            self.xs.requires_grad_(True)
         self.forward()
         
         # G
@@ -244,9 +289,6 @@ class NICE_CS(nn.Module):
                 if hasattr(state_dict, '_metadata'):
                     del state_dict._metadata
 
-                # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
-                    self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
                 net.load_state_dict(state_dict)
     
     def get_current_losses(self):
@@ -256,3 +298,33 @@ class NICE_CS(nn.Module):
             if isinstance(name, str):
                 errors_ret[name] = float(getattr(self, 'loss_' + name))  # float(...) works for both scalar tensor and float number
         return errors_ret 
+
+# Define Model
+class FB_NICE_CS(NICE_CS):
+    def __init__(self,opt):
+        super().__init__(opt)
+        if self.isTrain:
+            self.loss_names.append('imse')
+    
+    def backward_F(self):
+        # Content Loss
+        self.loss_mse = self.criterionMSE(self.yhats,self.ys)#*self.opt.lambda_l1
+        
+        # Backward Loss
+        self.loss_imse = self.criterionMSE(self.xhats,self.xs)
+        
+        # Calculate Gradients
+        self.loss = self.loss_mse + self.loss_imse
+        self.loss.backward()
+        
+    def optimize_parameters(self):
+        # forward
+        self.forward()
+        self.reverse()
+        
+        # G
+        self.optimizer.zero_grad()
+        self.backward_F()
+        self.optimizer.step()
+        
+        

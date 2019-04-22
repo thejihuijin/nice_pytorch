@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 import torch.autograd as autograd
 
 
-from nice.models import NICEModel
+from nice.models import NICEAdditiveModel as NICEModel
 
 import time
 import os
@@ -161,9 +161,8 @@ class CSDataset(Dataset):
     
     def __getitem__(self,idx):
         return (self.Xs[idx],self.Ys[idx])
-    
-# Define Model
-class NICE_CS(nn.Module):
+
+class BASEModel(nn.Module):
     def __init__(self,opt):
         super().__init__()
         self.opt = opt
@@ -177,27 +176,6 @@ class NICE_CS(nn.Module):
         self.netF = NICEModel(opt.input_dim, opt.hidden_dim, opt.num_layers,opt.use_batch_norm).to(self.device)
         
         self.model_names = ['F']
-        
-        if self.isTrain:
-            # Define Losses
-            self.criterionMSE = torch.nn.MSELoss()
-            self.loss_names = ['mse']
-            
-            # Define Optimizers
-            self.optimizer = torch.optim.Adam(self.netF.parameters(), lr=opt.lr)
-            
-            if opt.l1 > 0:
-                self.criterionL1 = torch.nn.L1Loss()
-                self.loss_names.append('l1')
-            if opt.fb > 0:
-                self.loss_names.append('imse')
-                if opt.fb_l1:
-                    self.criterionFB = torch.nn.L1Loss()
-                else:
-                    self.criterionFB = torch.nn.MSELoss()
-            if opt.jacvec > 0:
-                self.loss_names.append('jacvec')
-                self.AtA = torch.Tensor(np.load(opt.AtA_loc)).to(self.device)
         
         if not opt.isTrain:
             # Load networks
@@ -225,34 +203,12 @@ class NICE_CS(nn.Module):
     
     def backward_F(self):
         # Content Loss
-        self.loss_mse = self.criterionMSE(self.yhats,self.ys)#*self.opt.lambda_l1
-        self.loss = self.loss_mse
-
-        if self.opt.l1 > 0 or self.opt.fb > 0:
-            self.reverse()
-        if self.opt.l1 > 0:
-            self.loss_l1 = self.criterionL1(self.xhats, torch.zeros_like(self.xhats).to(self.device))*self.opt.l1
-            self.loss += self.loss_l1
-        if self.opt.fb > 0:
-            self.loss_imse = self.criterionFB(self.xhats,self.xs)*self.opt.fb
-            self.loss += self.loss_imse
-        if self.opt.jacvec > 0:
-            self.loss_jacvec = self.compute_jacvec()*self.opt.jacvec
-            self.loss += self.loss_jacvec
-        # Calculate Gradients
-        self.loss.backward()
+        pass
         
     def optimize_parameters(self):
         # forward
-        if self.opt.jacvec > 0:
-            self.xs.requires_grad_(True)
-        self.forward()
-        
-        # G
-        self.optimizer.zero_grad()
-        self.backward_F()
-        self.optimizer.step()
-        
+        pass 
+    
     def save_networks(self, epoch):
         """Save all the networks to the disk.
         Parameters:
@@ -297,8 +253,150 @@ class NICE_CS(nn.Module):
         for name in self.loss_names:
             if isinstance(name, str):
                 errors_ret[name] = float(getattr(self, 'loss_' + name))  # float(...) works for both scalar tensor and float number
-        return errors_ret 
+        return errors_ret     
 
+# Define Model
+class NICE_CS(BASEModel):
+    def __init__(self,opt):
+        super().__init__(opt)
+        self.opt = opt
+        self.gpu_ids = opt.gpu_ids
+        self.isTrain = opt.isTrain
+        self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu') 
+        self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)  # save all the checkpoints to save_dir
+        
+        
+        # Create Networks
+        self.netF = NICEModel(opt.input_dim, opt.hidden_dim, opt.num_layers,opt.use_batch_norm).to(self.device)
+        
+        self.model_names = ['F']
+        
+        if self.isTrain:
+            # Define Losses
+            self.criterionMSE = torch.nn.MSELoss()
+            self.loss_names = ['mse']
+            
+            # Define Optimizers
+            self.optimizer = torch.optim.Adam(self.netF.parameters(), lr=opt.lr)
+            
+            if opt.l1 > 0:
+                self.criterionL1 = torch.nn.L1Loss()
+                self.loss_names.append('l1')
+            if opt.fb > 0:
+                self.loss_names.append('imse')
+                if opt.fb_l1:
+                    self.criterionFB = torch.nn.L1Loss()
+                else:
+                    self.criterionFB = torch.nn.MSELoss()
+            if opt.jacvec > 0:
+                self.loss_names.append('jacvec')
+                self.AtA = torch.Tensor(np.load(opt.AtA_loc)).to(self.device)
+        
+        if not opt.isTrain:
+            # Load networks
+            self.load_networks(opt.epoch)
+    
+    
+    def backward_F(self):
+        # Content Loss
+        self.loss_mse = self.criterionMSE(self.yhats,self.ys)#*self.opt.lambda_l1
+        self.loss = self.loss_mse
+
+        if self.opt.l1 > 0 or self.opt.fb > 0:
+            self.reverse()
+        if self.opt.l1 > 0:
+            self.loss_l1 = self.criterionL1(self.xhats, torch.zeros_like(self.xhats).to(self.device))*self.opt.l1
+            self.loss += self.loss_l1
+        if self.opt.fb > 0:
+            self.loss_imse = self.criterionFB(self.xhats,self.xs)*self.opt.fb
+            self.loss += self.loss_imse
+        if self.opt.jacvec > 0:
+            self.loss_jacvec = self.compute_jacvec()*self.opt.jacvec
+            self.loss += self.loss_jacvec
+        # Calculate Gradients
+        self.loss.backward()
+        
+    def optimize_parameters(self):
+        # forward
+        if self.opt.jacvec > 0:
+            self.xs.requires_grad_(True)
+        self.forward()
+        
+        # G
+        self.optimizer.zero_grad()
+        self.backward_F()
+        self.optimizer.step()
+        
+
+# Define Model
+class NICE_ICS(BASEModel):
+    def __init__(self,opt):
+        super().__init__(opt)
+        self.opt = opt
+        self.gpu_ids = opt.gpu_ids
+        self.isTrain = opt.isTrain
+        self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu') 
+        self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)  # save all the checkpoints to save_dir
+        
+        
+        # Create Networks
+        self.netF = NICEModel(opt.input_dim, opt.hidden_dim, opt.num_layers,opt.use_batch_norm).to(self.device)
+        
+        self.model_names = ['F']
+        
+        if self.isTrain:
+            # Define Losses
+            if opt.use_l1:
+                self.criterionINV = torch.nn.L1Loss()
+            else:
+                self.criterionINV = torch.nn.MSELoss()
+            self.loss_names = ['cs']
+            
+            # Define Optimizers
+            self.optimizer = torch.optim.Adam(self.netF.parameters(), lr=opt.lr)
+            
+            if opt.jacvec > 0:
+                self.criterionJACVEC = torch.nn.MSELoss()
+                self.loss_names.append('jacvec')
+                self.AtA = torch.Tensor(np.load(opt.AtA_loc)).to(self.device)
+        
+        if not opt.isTrain:
+            # Load networks
+            self.load_networks(opt.epoch)
+    
+    
+    def compute_jacvec(self):
+        grad_outputs = torch.randn(self.yhats.size()).to(self.device)
+        J = autograd.grad(outputs=self.yhats, inputs=self.xs,
+                 grad_outputs=grad_outputs,
+                 create_graph=True, retain_graph=True, only_inputs=True)[0]
+        gt = torch.matmul(grad_outputs,self.AtA)
+        
+        return self.criterionJACVEC(J,gt)
+    
+    def backward_F(self):
+        # Content Loss
+        self.reverse()
+        self.loss_cs = self.criterionINV(self.xhats,self.xs)#*self.opt.lambda_l1
+        self.loss = self.loss_cs
+
+        if self.opt.jacvec > 0:
+            self.forward()
+            self.loss_jacvec = self.compute_jacvec()*self.opt.jacvec
+            self.loss += self.loss_jacvec
+        # Calculate Gradients
+        self.loss.backward()
+        
+    def optimize_parameters(self):
+        # forward
+        if self.opt.jacvec > 0:
+            self.xs.requires_grad_(True)
+        
+        # G
+        self.optimizer.zero_grad()
+        self.backward_F()
+        self.optimizer.step()
+        
 # Define Model
 class FB_NICE_CS(NICE_CS):
     def __init__(self,opt):

@@ -4,7 +4,7 @@ Implementation of models from paper.
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-from .layers import DoubleAffineLayer
+from .layers import DoubleAffineLayer, AdditiveCouplingLayer
 
 def _build_relu_network(latent_dim, hidden_dim, num_layers, norm):
     """Helper function to construct a ReLU network of varying number of layers."""
@@ -112,7 +112,7 @@ class NICEAdditiveModel(nn.Module):
     * a diagonal scaling matrix output layer
     """
     def __init__(self, input_dim, hidden_dim, num_layers,norm=True):
-        super(NICEModel, self).__init__()
+        super(NICEAdditiveModel, self).__init__()
         assert (input_dim % 2 == 0), "[NICEModel] only even input dimensions supported for now"
         assert (num_layers > 2), "[NICEModel] num_layers must be at least 3"
         self.input_dim = input_dim

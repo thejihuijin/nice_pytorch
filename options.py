@@ -106,7 +106,7 @@ class BaseOptions():
         self.opt = opt
         return self.opt
 
-class CSTrainOptions(BaseOptions):
+class TrainOptions(BaseOptions):
     def initialize(self,parser):
         parser = super().initialize(parser)
         
@@ -144,6 +144,29 @@ class CSTrainOptions(BaseOptions):
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{load_size}')
         self.isTrain = True
         
+
+        return parser
+class ICSTrainOptions(TrainOptions):
+    def initialize(self,parser):
+        parser = super().initialize(parser)
+        parser.add_argument('--dataroot', type=str, default='datasets/cs_f50_data.npz', help='path to data')
+        parser.add_argument("--batch_size", type=int, default=5000, help="training batch size")
+
+        
+        parser.add_argument("--use_l1", action='store_true', help='Use L1 instead of MSE')
+        
+        # Regularizers
+        parser.add_argument("--jacvec", type=float,default=0, help="Train with projected jacobian information")
+        parser.add_argument("--AtA_loc",type=str,default='AtA.npy', help='Location of AtA matrix')
+        
+        return parser
+
+        
+
+class CSTrainOptions(TrainOptions):
+    def initialize(self,parser):
+        parser = super().initialize(parser)
+
         # Regularizers
         parser.add_argument("--l1", type=float, default=0, help="L1 sparsity regularizer on inverse mode. Default=0")
         parser.add_argument("--fb", type=float, default=0, help="Train on inverse mode. Default=0")
@@ -152,8 +175,7 @@ class CSTrainOptions(BaseOptions):
         parser.add_argument("--AtA_loc",type=str,default='AtA.npy', help='Location of AtA matrix')
 
         
-        return parser
-    
+        return parser    
 class CSTestOptions(BaseOptions):
     def initialize(self,parser):
         parser = super().initialize(parser)

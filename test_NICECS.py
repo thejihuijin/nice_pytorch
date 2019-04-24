@@ -9,7 +9,7 @@ import torchvision
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-from cs_exp import FB_NICE_CS, NICE_CS, CSDataset
+from cs_exp import NICE_ICS, CSDataset
 from util.visualizer import Visualizer
 
 import time
@@ -23,15 +23,15 @@ import glob
 
 if __name__ == '__main__':
     # Get default options
-    opt = CSTestOptions().parse(['--gpu_ids','1'])
+    opt = CSTestOptions().parse(['--gpu_ids','0','--mute'])
     
     # Get experiment Paths
-    checkpoint_paths = [os.path.split(path)[1] for path in glob.glob('./checkpoints/nice_cs_*')]# if path.find('l1e-1') > 0 or path.find('l1e0') > 0]
+    checkpoint_paths = [os.path.split(path)[1] for path in glob.glob('./checkpoints/nice_ics_*')]# if path.find('l1e-1') > 0 or path.find('l1e0') > 0]
     checkpoint_paths.sort()
     #paths = paths[:-1]
 
     tested = [os.path.split(path)[1][:-4] for path in glob.glob('./results/*.png')]
-    ignore = [] 
+    ignore = ['nice_ics_jacvec1e-2'] 
     #ignore = ['nice_cs_nl3_jacvece-3_lr2e-4']
 
     paths = [path for path in checkpoint_paths if path not in tested and path not in ignore]
@@ -41,7 +41,7 @@ if __name__ == '__main__':
     for name in paths:
         # extract options
         #_, name = os.path.split(path)
-        nl = int(name[name.find('nl')+2])
+        nl = 3#int(name[name.find('nl')+2])
         
         print(name)
 
@@ -56,14 +56,14 @@ if __name__ == '__main__':
         epoch_nums=np.arange(500,500*len(glob.glob(os.path.join('./checkpoints/',name,'*00_*')))+1,500)
         
         # Load training data
-        dataset = CSDataset('cs_data.npz')
+        dataset = CSDataset('datasets/cs_f50_data.npz')
         data_loader = DataLoader(dataset, batch_size=10000,shuffle=False)
         
         forward_mses = np.zeros((len(epoch_nums),len(data_loader)))
         reverse_mses = np.zeros((len(epoch_nums),len(data_loader)))
         for i,epoch in enumerate(epoch_nums):
             opt.epoch = epoch
-            model = NICE_CS(opt)
+            model = NICE_ICS(opt).eval()
             for j,data in enumerate(data_loader):
                 model.set_input(data)
                 model.reverse()
@@ -75,14 +75,14 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
         # Load testing data
-        dataset = CSDataset('cs_test_data.npz')
+        dataset = CSDataset('datasets/cs_f50_test_data.npz')
         data_loader = DataLoader(dataset, batch_size=10000,shuffle=False)
         
         test_forward_mses = np.zeros((len(epoch_nums),len(data_loader)))
         test_reverse_mses = np.zeros((len(epoch_nums),len(data_loader)))
         for i,epoch in enumerate(epoch_nums):
             opt.epoch = epoch
-            model = NICE_CS(opt)
+            model = NICE_ICS(opt).eval()
             for j,data in enumerate(data_loader):
                 model.set_input(data)
                 model.reverse()
